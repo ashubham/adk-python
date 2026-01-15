@@ -96,6 +96,13 @@ class StorageSession(Base):
       PreciseTimestamp, default=func.now(), onupdate=func.now()
   )
 
+  display_name: Mapped[Optional[str]] = mapped_column(
+      String(DEFAULT_MAX_VARCHAR_LENGTH), nullable=True
+  )
+  labels: Mapped[MutableDict[str, str]] = mapped_column(
+      MutableDict.as_mutable(DynamicJSON), default={}
+  )
+
   storage_events: Mapped[list[StorageEvent]] = relationship(
       "StorageEvent",
       back_populates="storage_session",
@@ -139,6 +146,8 @@ class StorageSession(Base):
         state=state,
         events=events,
         last_update_time=self.update_timestamp_tz,
+        display_name=self.display_name,
+        labels=self.labels or {},
     )
 
 

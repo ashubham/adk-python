@@ -12,11 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Utilities for local .adk folder persistence."""
+
 from __future__ import annotations
 
 import asyncio
 import logging
 from pathlib import Path
+from typing import Any
 from typing import Mapping
 from typing import Optional
 
@@ -27,6 +29,7 @@ from ...artifacts.file_artifact_service import FileArtifactService
 from ...events.event import Event
 from ...sessions.base_session_service import BaseSessionService
 from ...sessions.base_session_service import GetSessionConfig
+from ...sessions.base_session_service import ListSessionsConfig
 from ...sessions.base_session_service import ListSessionsResponse
 from ...sessions.session import Session
 from .dot_adk_folder import dot_adk_folder_for_agent
@@ -155,8 +158,10 @@ class PerAgentDatabaseSessionService(BaseSessionService):
       *,
       app_name: str,
       user_id: str,
-      state: Optional[dict[str, object]] = None,
+      state: Optional[dict[str, Any]] = None,
       session_id: Optional[str] = None,
+      display_name: Optional[str] = None,
+      labels: Optional[dict[str, str]] = None,
   ) -> Session:
     service = await self._get_service(app_name)
     return await service.create_session(
@@ -164,6 +169,8 @@ class PerAgentDatabaseSessionService(BaseSessionService):
         user_id=user_id,
         state=state,
         session_id=session_id,
+        display_name=display_name,
+        labels=labels,
     )
 
   @override
@@ -189,9 +196,12 @@ class PerAgentDatabaseSessionService(BaseSessionService):
       *,
       app_name: str,
       user_id: Optional[str] = None,
+      config: Optional[ListSessionsConfig] = None,
   ) -> ListSessionsResponse:
     service = await self._get_service(app_name)
-    return await service.list_sessions(app_name=app_name, user_id=user_id)
+    return await service.list_sessions(
+        app_name=app_name, user_id=user_id, config=config
+    )
 
   @override
   async def delete_session(

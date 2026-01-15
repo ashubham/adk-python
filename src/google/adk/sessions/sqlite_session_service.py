@@ -34,6 +34,7 @@ from ..errors.already_exists_error import AlreadyExistsError
 from ..events.event import Event
 from .base_session_service import BaseSessionService
 from .base_session_service import GetSessionConfig
+from .base_session_service import ListSessionsConfig
 from .base_session_service import ListSessionsResponse
 from .session import Session
 from .state import State
@@ -68,6 +69,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     state TEXT NOT NULL,
     create_time REAL NOT NULL,
     update_time REAL NOT NULL,
+    display_name TEXT,
+    labels TEXT NOT NULL DEFAULT '{}',
     PRIMARY KEY (app_name, user_id, id)
 );
 """
@@ -161,12 +164,15 @@ class SqliteSessionService(BaseSessionService):
       user_id: str,
       state: Optional[dict[str, Any]] = None,
       session_id: Optional[str] = None,
+      display_name: Optional[str] = None,
+      labels: Optional[dict[str, str]] = None,
   ) -> Session:
     if session_id:
       session_id = session_id.strip()
     if not session_id:
       session_id = str(uuid.uuid4())
     now = time.time()
+    labels = labels or {}
 
     async with self._get_db_connection() as db:
       # Check if session_id already exists
@@ -200,8 +206,8 @@ class SqliteSessionService(BaseSessionService):
       # Store the session
       await db.execute(
           """
-          INSERT INTO sessions (app_name, user_id, id, state, create_time, update_time)
-          VALUES (?, ?, ?, ?, ?, ?)
+          INSERT INTO sessions (app_name, user_id, id, state, create_time, update_time, display_name, labels)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
           """,
           (
               app_name,
@@ -210,6 +216,8 @@ class SqliteSessionService(BaseSessionService):
               json.dumps(session_state),
               now,
               now,
+              display_name,
+              json.dumps(labels),
           ),
       )
       await db.commit()
@@ -225,6 +233,8 @@ class SqliteSessionService(BaseSessionService):
           state=merged_state,
           events=[],
           last_update_time=now,
+          display_name=display_name,
+          labels=labels,
       )
 
   @override
@@ -238,8 +248,8 @@ class SqliteSessionService(BaseSessionService):
   ) -> Optional[Session]:
     async with self._get_db_connection() as db:
       async with db.execute(
-          "SELECT state, update_time FROM sessions WHERE app_name=? AND"
-          " user_id=? AND id=?",
+          "SELECT state, update_time, display_name, labels FROM sessions WHERE"
+          " app_name=? AND user_id=? AND id=?",
           (app_name, user_id, session_id),
       ) as cursor:
         session_row = await cursor.fetchone()
@@ -247,6 +257,10 @@ class SqliteSessionService(BaseSessionService):
           return None
         session_state = json.loads(session_row["state"])
         last_update_time = session_row["update_time"]
+        display_name = session_row["display_name"]
+        labels = (
+            json.loads(session_row["labels"]) if session_row["labels"] else {}
+        )
 
       # Build events query
       query_parts = [
@@ -288,25 +302,31 @@ class SqliteSessionService(BaseSessionService):
           state=merged_state,
           events=events,
           last_update_time=last_update_time,
+          display_name=display_name,
+          labels=labels,
       )
 
   @override
   async def list_sessions(
-      self, *, app_name: str, user_id: Optional[str] = None
+      self,
+      *,
+      app_name: str,
+      user_id: Optional[str] = None,
+      config: Optional[ListSessionsConfig] = None,
   ) -> ListSessionsResponse:
     sessions_list = []
     async with self._get_db_connection() as db:
       # Fetch sessions
       if user_id:
         session_rows = await db.execute_fetchall(
-            "SELECT id, user_id, state, update_time FROM sessions WHERE"
-            " app_name=? AND user_id=?",
+            "SELECT id, user_id, state, update_time, display_name, labels FROM"
+            " sessions WHERE app_name=? AND user_id=?",
             (app_name, user_id),
         )
       else:
         session_rows = await db.execute_fetchall(
-            "SELECT id, user_id, state, update_time FROM sessions WHERE"
-            " app_name=?",
+            "SELECT id, user_id, state, update_time, display_name, labels FROM"
+            " sessions WHERE app_name=?",
             (app_name,),
         )
 
@@ -328,11 +348,19 @@ class SqliteSessionService(BaseSessionService):
             user_states_map[row["user_id"]] = json.loads(row["state"])
 
       # Build session list
+      labels_filter = config.labels if config else None
       for row in session_rows:
         session_user_id = row["user_id"]
         session_state = json.loads(row["state"])
         user_state = user_states_map.get(session_user_id, {})
         merged_state = _merge_state(app_state, user_state, session_state)
+        labels = json.loads(row["labels"]) if row["labels"] else {}
+
+        # Filter by labels if specified
+        if labels_filter:
+          if not all(labels.get(k) == v for k, v in labels_filter.items()):
+            continue
+
         sessions_list.append(
             Session(
                 app_name=app_name,
@@ -341,6 +369,8 @@ class SqliteSessionService(BaseSessionService):
                 state=merged_state,
                 events=[],
                 last_update_time=row["update_time"],
+                display_name=row["display_name"],
+                labels=labels,
             )
         )
     return ListSessionsResponse(sessions=sessions_list)
@@ -461,7 +491,21 @@ class SqliteSessionService(BaseSessionService):
       db.row_factory = aiosqlite.Row
       await db.execute(PRAGMA_FOREIGN_KEYS)
       await db.executescript(CREATE_SCHEMA_SQL)
+      # Ensure new columns exist for existing databases
+      await self._ensure_new_columns(db)
       yield db
+
+  async def _ensure_new_columns(self, db: aiosqlite.Connection) -> None:
+    """Ensures display_name and labels columns exist in the sessions table."""
+    async with db.execute("PRAGMA table_info(sessions)") as cursor:
+      columns = [row[1] async for row in cursor]
+
+    if "display_name" not in columns:
+      await db.execute("ALTER TABLE sessions ADD COLUMN display_name TEXT")
+    if "labels" not in columns:
+      await db.execute(
+          "ALTER TABLE sessions ADD COLUMN labels TEXT NOT NULL DEFAULT '{}'"
+      )
 
   async def _get_state(
       self, db: aiosqlite.Connection, query: str, params: tuple

@@ -41,6 +41,7 @@ from ..errors.already_exists_error import AlreadyExistsError
 from ..events.event import Event
 from .base_session_service import BaseSessionService
 from .base_session_service import GetSessionConfig
+from .base_session_service import ListSessionsConfig
 from .base_session_service import ListSessionsResponse
 from .migration import _schema_check_utils
 from .schemas.v0 import Base as BaseV0
@@ -229,6 +230,8 @@ class DatabaseSessionService(BaseSessionService):
       user_id: str,
       state: Optional[dict[str, Any]] = None,
       session_id: Optional[str] = None,
+      display_name: Optional[str] = None,
+      labels: Optional[dict[str, str]] = None,
   ) -> Session:
     # 1. Populate states.
     # 2. Build storage session object
@@ -280,6 +283,8 @@ class DatabaseSessionService(BaseSessionService):
           user_id=user_id,
           id=session_id,
           state=session_state,
+          display_name=display_name,
+          labels=labels or {},
       )
       sql_session.add(storage_session)
       await sql_session.commit()
@@ -355,7 +360,11 @@ class DatabaseSessionService(BaseSessionService):
 
   @override
   async def list_sessions(
-      self, *, app_name: str, user_id: Optional[str] = None
+      self,
+      *,
+      app_name: str,
+      user_id: Optional[str] = None,
+      config: Optional[ListSessionsConfig] = None,
   ) -> ListSessionsResponse:
     await self._prepare_tables()
     schema = self._get_schema_classes()
@@ -393,7 +402,16 @@ class DatabaseSessionService(BaseSessionService):
           user_states_map[storage_user_state.user_id] = storage_user_state.state
 
       sessions = []
+      labels_filter = config.labels if config else None
       for storage_session in results:
+        # Filter by labels if specified
+        if labels_filter:
+          session_labels = storage_session.labels or {}
+          if not all(
+              session_labels.get(k) == v for k, v in labels_filter.items()
+          ):
+            continue
+
         session_state = storage_session.state
         user_state = user_states_map.get(storage_session.user_id, {})
         merged_state = _merge_state(app_state, user_state, session_state)
@@ -436,8 +454,8 @@ class DatabaseSessionService(BaseSessionService):
       if storage_session.update_timestamp_tz > session.last_update_time:
         raise ValueError(
             "The last_update_time provided in the session object"
-            f" {datetime.fromtimestamp(session.last_update_time):'%Y-%m-%d %H:%M:%S'} is"
-            " earlier than the update_time in the storage_session"
+            f" {datetime.fromtimestamp(session.last_update_time):'%Y-%m-%d %H:%M:%S'}"
+            " is earlier than the update_time in the storage_session"
             f" {datetime.fromtimestamp(storage_session.update_timestamp_tz):'%Y-%m-%d %H:%M:%S'}."
             " Please check if it is a stale session."
         )

@@ -36,6 +36,7 @@ from ..events.event_actions import EventActions
 from ..utils.vertex_ai_utils import get_express_mode_api_key
 from .base_session_service import BaseSessionService
 from .base_session_service import GetSessionConfig
+from .base_session_service import ListSessionsConfig
 from .base_session_service import ListSessionsResponse
 from .session import Session
 
@@ -84,6 +85,8 @@ class VertexAiSessionService(BaseSessionService):
       user_id: str,
       state: Optional[dict[str, Any]] = None,
       session_id: Optional[str] = None,
+      display_name: Optional[str] = None,
+      labels: Optional[dict[str, str]] = None,
       **kwargs: Any,
   ) -> Session:
     """Creates a new session.
@@ -93,6 +96,8 @@ class VertexAiSessionService(BaseSessionService):
       user_id: The ID of the user.
       state: The initial state of the session.
       session_id: The ID of the session.
+      display_name: Optional display name for the session.
+      labels: Optional labels with user-defined metadata to organize sessions.
       **kwargs: Additional arguments to pass to the session creation. E.g. set
         expire_time='2025-10-01T00:00:00Z' to set the session expiration time.
         See https://cloud.google.com/vertex-ai/generative-ai/docs/reference/rest/v1beta1/projects.locations.reasoningEngines.sessions
@@ -110,6 +115,10 @@ class VertexAiSessionService(BaseSessionService):
     reasoning_engine_id = self._get_reasoning_engine_id(app_name)
 
     config = {'session_state': state} if state else {}
+    if display_name:
+      config['display_name'] = display_name
+    if labels:
+      config['labels'] = labels
     config.update(kwargs)
     async with self._get_api_client() as api_client:
       api_response = await api_client.agent_engines.sessions.create(
@@ -127,6 +136,8 @@ class VertexAiSessionService(BaseSessionService):
         id=session_id,
         state=getattr(get_session_response, 'session_state', None) or {},
         last_update_time=get_session_response.update_time.timestamp(),
+        display_name=getattr(get_session_response, 'display_name', None),
+        labels=getattr(get_session_response, 'labels', None) or {},
     )
     return session
 
@@ -184,6 +195,8 @@ class VertexAiSessionService(BaseSessionService):
           id=session_id,
           state=getattr(get_session_response, 'session_state', None) or {},
           last_update_time=update_timestamp,
+          display_name=getattr(get_session_response, 'display_name', None),
+          labels=getattr(get_session_response, 'labels', None) or {},
       )
       # Preserve the entire event stream that Vertex returns rather than trying
       # to discard events written milliseconds after the session resource was
@@ -201,18 +214,30 @@ class VertexAiSessionService(BaseSessionService):
 
   @override
   async def list_sessions(
-      self, *, app_name: str, user_id: Optional[str] = None
+      self,
+      *,
+      app_name: str,
+      user_id: Optional[str] = None,
+      config: Optional[ListSessionsConfig] = None,
   ) -> ListSessionsResponse:
     reasoning_engine_id = self._get_reasoning_engine_id(app_name)
 
     async with self._get_api_client() as api_client:
       sessions = []
-      config = {}
+      api_config = {}
+      filter_parts = []
       if user_id is not None:
-        config['filter'] = f'user_id="{user_id}"'
+        filter_parts.append(f'user_id="{user_id}"')
+      # Add labels filter if specified
+      if config and config.labels:
+        for key, value in config.labels.items():
+          filter_parts.append(f'labels.{key}="{value}"')
+      if filter_parts:
+        api_config['filter'] = ' AND '.join(filter_parts)
+
       sessions_iterator = await api_client.agent_engines.sessions.list(
           name=f'reasoningEngines/{reasoning_engine_id}',
-          config=config,
+          config=api_config,
       )
 
       for api_session in sessions_iterator:
@@ -223,6 +248,8 @@ class VertexAiSessionService(BaseSessionService):
                 id=api_session.name.split('/')[-1],
                 state=getattr(api_session, 'session_state', None) or {},
                 last_update_time=api_session.update_time.timestamp(),
+                display_name=getattr(api_session, 'display_name', None),
+                labels=getattr(api_session, 'labels', None) or {},
             )
         )
 

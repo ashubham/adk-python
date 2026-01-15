@@ -27,6 +27,7 @@ from ..errors.already_exists_error import AlreadyExistsError
 from ..events.event import Event
 from .base_session_service import BaseSessionService
 from .base_session_service import GetSessionConfig
+from .base_session_service import ListSessionsConfig
 from .base_session_service import ListSessionsResponse
 from .session import Session
 from .state import State
@@ -58,12 +59,16 @@ class InMemorySessionService(BaseSessionService):
       user_id: str,
       state: Optional[dict[str, Any]] = None,
       session_id: Optional[str] = None,
+      display_name: Optional[str] = None,
+      labels: Optional[dict[str, str]] = None,
   ) -> Session:
     return self._create_session_impl(
         app_name=app_name,
         user_id=user_id,
         state=state,
         session_id=session_id,
+        display_name=display_name,
+        labels=labels,
     )
 
   def create_session_sync(
@@ -73,6 +78,8 @@ class InMemorySessionService(BaseSessionService):
       user_id: str,
       state: Optional[dict[str, Any]] = None,
       session_id: Optional[str] = None,
+      display_name: Optional[str] = None,
+      labels: Optional[dict[str, str]] = None,
   ) -> Session:
     logger.warning('Deprecated. Please migrate to the async method.')
     return self._create_session_impl(
@@ -80,6 +87,8 @@ class InMemorySessionService(BaseSessionService):
         user_id=user_id,
         state=state,
         session_id=session_id,
+        display_name=display_name,
+        labels=labels,
     )
 
   def _create_session_impl(
@@ -89,6 +98,8 @@ class InMemorySessionService(BaseSessionService):
       user_id: str,
       state: Optional[dict[str, Any]] = None,
       session_id: Optional[str] = None,
+      display_name: Optional[str] = None,
+      labels: Optional[dict[str, str]] = None,
   ) -> Session:
     if session_id and self._get_session_impl(
         app_name=app_name, user_id=user_id, session_id=session_id
@@ -116,6 +127,8 @@ class InMemorySessionService(BaseSessionService):
         id=session_id,
         state=session_state or {},
         last_update_time=time.time(),
+        display_name=display_name,
+        labels=labels or {},
     )
 
     if app_name not in self.sessions:
@@ -218,20 +231,47 @@ class InMemorySessionService(BaseSessionService):
       ][key]
     return copied_session
 
+  def _matches_labels(
+      self, session: Session, labels: Optional[dict[str, str]]
+  ) -> bool:
+    """Checks if a session has all the specified labels."""
+    if not labels:
+      return True
+    for key, value in labels.items():
+      if session.labels.get(key) != value:
+        return False
+    return True
+
   @override
   async def list_sessions(
-      self, *, app_name: str, user_id: Optional[str] = None
+      self,
+      *,
+      app_name: str,
+      user_id: Optional[str] = None,
+      config: Optional[ListSessionsConfig] = None,
   ) -> ListSessionsResponse:
-    return self._list_sessions_impl(app_name=app_name, user_id=user_id)
+    return self._list_sessions_impl(
+        app_name=app_name, user_id=user_id, config=config
+    )
 
   def list_sessions_sync(
-      self, *, app_name: str, user_id: Optional[str] = None
+      self,
+      *,
+      app_name: str,
+      user_id: Optional[str] = None,
+      config: Optional[ListSessionsConfig] = None,
   ) -> ListSessionsResponse:
     logger.warning('Deprecated. Please migrate to the async method.')
-    return self._list_sessions_impl(app_name=app_name, user_id=user_id)
+    return self._list_sessions_impl(
+        app_name=app_name, user_id=user_id, config=config
+    )
 
   def _list_sessions_impl(
-      self, *, app_name: str, user_id: Optional[str] = None
+      self,
+      *,
+      app_name: str,
+      user_id: Optional[str] = None,
+      config: Optional[ListSessionsConfig] = None,
   ) -> ListSessionsResponse:
     empty_response = ListSessionsResponse()
     if app_name not in self.sessions:
@@ -240,17 +280,22 @@ class InMemorySessionService(BaseSessionService):
       return empty_response
 
     sessions_without_events = []
+    labels_filter = config.labels if config else None
 
     if user_id is None:
       for user_id in self.sessions[app_name]:
         for session_id in self.sessions[app_name][user_id]:
           session = self.sessions[app_name][user_id][session_id]
+          if not self._matches_labels(session, labels_filter):
+            continue
           copied_session = copy.deepcopy(session)
           copied_session.events = []
           copied_session = self._merge_state(app_name, user_id, copied_session)
           sessions_without_events.append(copied_session)
     else:
       for session in self.sessions[app_name][user_id].values():
+        if not self._matches_labels(session, labels_filter):
+          continue
         copied_session = copy.deepcopy(session)
         copied_session.events = []
         copied_session = self._merge_state(app_name, user_id, copied_session)

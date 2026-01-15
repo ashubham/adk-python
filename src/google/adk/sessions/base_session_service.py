@@ -33,6 +33,14 @@ class GetSessionConfig(BaseModel):
   after_timestamp: Optional[float] = None
 
 
+class ListSessionsConfig(BaseModel):
+  """The configuration of listing sessions."""
+
+  labels: Optional[dict[str, str]] = None
+  """Filter sessions by labels. Only sessions that have all the specified
+  labels will be returned."""
+
+
 class ListSessionsResponse(BaseModel):
   """The response of listing sessions.
 
@@ -56,6 +64,8 @@ class BaseSessionService(abc.ABC):
       user_id: str,
       state: Optional[dict[str, Any]] = None,
       session_id: Optional[str] = None,
+      display_name: Optional[str] = None,
+      labels: Optional[dict[str, str]] = None,
   ) -> Session:
     """Creates a new session.
 
@@ -65,6 +75,9 @@ class BaseSessionService(abc.ABC):
       state: the initial state of the session.
       session_id: the client-provided id of the session. If not provided, a
         generated ID will be used.
+      display_name: optional display name for the session.
+      labels: optional labels with user-defined metadata to organize sessions.
+        Label keys and values can be no longer than 64 characters.
 
     Returns:
       session: The newly created session instance.
@@ -83,7 +96,11 @@ class BaseSessionService(abc.ABC):
 
   @abc.abstractmethod
   async def list_sessions(
-      self, *, app_name: str, user_id: Optional[str] = None
+      self,
+      *,
+      app_name: str,
+      user_id: Optional[str] = None,
+      config: Optional[ListSessionsConfig] = None,
   ) -> ListSessionsResponse:
     """Lists all the sessions for a user.
 
@@ -91,6 +108,7 @@ class BaseSessionService(abc.ABC):
       app_name: The name of the app.
       user_id: The ID of the user. If not provided, lists all sessions for all
         users.
+      config: Optional configuration for filtering sessions.
 
     Returns:
       A ListSessionsResponse containing the sessions.

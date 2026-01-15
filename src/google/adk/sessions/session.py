@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 from typing import Any
+from typing import Optional
 
 from pydantic import alias_generators
 from pydantic import BaseModel
@@ -48,3 +49,8 @@ class Session(BaseModel):
   call/response, etc."""
   last_update_time: float = 0.0
   """The last update time of the session."""
+  display_name: Optional[str] = None
+  """Optional display name for the session."""
+  labels: dict[str, str] = Field(default_factory=dict)
+  """Labels with user-defined metadata to organize sessions.
+  Label keys and values can be no longer than 64 characters."""

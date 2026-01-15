@@ -603,3 +603,123 @@ async def test_partial_events_are_not_persisted(session_service):
       app_name=app_name, user_id=user_id, session_id=session.id
   )
   assert len(session_got.events) == 0
+
+
+# === Tests for display_name and labels ===
+
+
+@pytest.mark.asyncio
+async def test_create_session_with_display_name_and_labels(session_service):
+  app_name = 'my_app'
+  user_id = 'test_user'
+  display_name = 'Test Session'
+  labels = {'env': 'test', 'team': 'ai'}
+
+  session = await session_service.create_session(
+      app_name=app_name,
+      user_id=user_id,
+      display_name=display_name,
+      labels=labels,
+  )
+
+  assert session.display_name == display_name
+  assert session.labels == labels
+
+  # Verify persisted session
+  got_session = await session_service.get_session(
+      app_name=app_name, user_id=user_id, session_id=session.id
+  )
+  assert got_session.display_name == display_name
+  assert got_session.labels == labels
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_filter_by_labels(session_service):
+  from google.adk.sessions.base_session_service import ListSessionsConfig
+
+  app_name = 'my_app'
+  user_id = 'test_user'
+
+  # Create sessions with different labels
+  await session_service.create_session(
+      app_name=app_name,
+      user_id=user_id,
+      session_id='dev_session',
+      display_name='Dev Session',
+      labels={'env': 'dev', 'version': '1.0'},
+  )
+  await session_service.create_session(
+      app_name=app_name,
+      user_id=user_id,
+      session_id='prod_session',
+      display_name='Prod Session',
+      labels={'env': 'prod', 'version': '2.0'},
+  )
+  await session_service.create_session(
+      app_name=app_name,
+      user_id=user_id,
+      session_id='test_session',
+      display_name='Test Session',
+      labels={'env': 'dev', 'version': '2.0'},
+  )
+
+  # List all sessions (no filter)
+  all_response = await session_service.list_sessions(
+      app_name=app_name, user_id=user_id
+  )
+  assert len(all_response.sessions) == 3
+
+  # Filter by env=dev
+  config = ListSessionsConfig(labels={'env': 'dev'})
+  dev_response = await session_service.list_sessions(
+      app_name=app_name, user_id=user_id, config=config
+  )
+  assert len(dev_response.sessions) == 2
+  assert {s.id for s in dev_response.sessions} == {
+      'dev_session',
+      'test_session',
+  }
+
+  # Filter by env=prod
+  config = ListSessionsConfig(labels={'env': 'prod'})
+  prod_response = await session_service.list_sessions(
+      app_name=app_name, user_id=user_id, config=config
+  )
+  assert len(prod_response.sessions) == 1
+  assert prod_response.sessions[0].id == 'prod_session'
+
+  # Filter by multiple labels
+  config = ListSessionsConfig(labels={'env': 'dev', 'version': '2.0'})
+  filtered_response = await session_service.list_sessions(
+      app_name=app_name, user_id=user_id, config=config
+  )
+  assert len(filtered_response.sessions) == 1
+  assert filtered_response.sessions[0].id == 'test_session'
+
+  # Filter by non-existent label value
+  config = ListSessionsConfig(labels={'env': 'staging'})
+  empty_response = await session_service.list_sessions(
+      app_name=app_name, user_id=user_id, config=config
+  )
+  assert len(empty_response.sessions) == 0
+
+
+@pytest.mark.asyncio
+async def test_session_default_display_name_and_labels(session_service):
+  app_name = 'my_app'
+  user_id = 'test_user'
+
+  session = await session_service.create_session(
+      app_name=app_name, user_id=user_id
+  )
+
+  # Default values
+  assert session.display_name is None
+  assert session.labels == {}
+
+  # Verify persisted session
+  got_session = await session_service.get_session(
+      app_name=app_name, user_id=user_id, session_id=session.id
+  )
+  assert got_session.display_name is None
+  assert got_session.labels == {}
