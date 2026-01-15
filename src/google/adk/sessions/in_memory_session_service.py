@@ -237,10 +237,7 @@ class InMemorySessionService(BaseSessionService):
     """Checks if a session has all the specified labels."""
     if not labels:
       return True
-    for key, value in labels.items():
-      if session.labels.get(key) != value:
-        return False
-    return True
+    return all(session.labels.get(k) == v for k, v in labels.items())
 
   @override
   async def list_sessions(

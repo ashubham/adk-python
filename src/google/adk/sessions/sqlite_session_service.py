@@ -316,19 +316,28 @@ class SqliteSessionService(BaseSessionService):
   ) -> ListSessionsResponse:
     sessions_list = []
     async with self._get_db_connection() as db:
-      # Fetch sessions
+      # Build query with filters applied at database level
+      query_parts = [
+          "SELECT id, user_id, state, update_time, display_name, labels FROM"
+          " sessions",
+          "WHERE app_name=?",
+      ]
+      params: list[Any] = [app_name]
+
       if user_id:
-        session_rows = await db.execute_fetchall(
-            "SELECT id, user_id, state, update_time, display_name, labels FROM"
-            " sessions WHERE app_name=? AND user_id=?",
-            (app_name, user_id),
-        )
-      else:
-        session_rows = await db.execute_fetchall(
-            "SELECT id, user_id, state, update_time, display_name, labels FROM"
-            " sessions WHERE app_name=?",
-            (app_name,),
-        )
+        query_parts.append("AND user_id=?")
+        params.append(user_id)
+
+      # Apply label filter at database level using json_extract
+      labels_filter = config.labels if config else None
+      if labels_filter:
+        for key, value in labels_filter.items():
+          query_parts.append("AND json_extract(labels, ?)=?")
+          params.extend([f"$.{key}", value])
+
+      session_rows = await db.execute_fetchall(
+          " ".join(query_parts), tuple(params)
+      )
 
       # Fetch app state
       app_state = await self._get_app_state(db, app_name)
@@ -348,18 +357,12 @@ class SqliteSessionService(BaseSessionService):
             user_states_map[row["user_id"]] = json.loads(row["state"])
 
       # Build session list
-      labels_filter = config.labels if config else None
       for row in session_rows:
         session_user_id = row["user_id"]
         session_state = json.loads(row["state"])
         user_state = user_states_map.get(session_user_id, {})
         merged_state = _merge_state(app_state, user_state, session_state)
         labels = json.loads(row["labels"]) if row["labels"] else {}
-
-        # Filter by labels if specified
-        if labels_filter:
-          if not all(labels.get(k) == v for k, v in labels_filter.items()):
-            continue
 
         sessions_list.append(
             Session(

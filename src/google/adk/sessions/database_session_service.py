@@ -375,6 +375,21 @@ class DatabaseSessionService(BaseSessionService):
       if user_id is not None:
         stmt = stmt.filter(schema.StorageSession.user_id == user_id)
 
+      labels_filter = config.labels if config else None
+
+      # Apply label filter at database level for backends with native JSON
+      # support (PostgreSQL JSONB). For other backends, filter in Python.
+      apply_python_filter = False
+      if labels_filter:
+        if self.db_engine.dialect.name == "postgresql":
+          # PostgreSQL JSONB supports efficient containment queries via @>
+          stmt = stmt.filter(
+              schema.StorageSession.labels.contains(labels_filter)
+          )
+        else:
+          # For other backends (SQLite, MySQL), filter in Python after fetching
+          apply_python_filter = True
+
       result = await sql_session.execute(stmt)
       results = result.scalars().all()
 
@@ -402,10 +417,9 @@ class DatabaseSessionService(BaseSessionService):
           user_states_map[storage_user_state.user_id] = storage_user_state.state
 
       sessions = []
-      labels_filter = config.labels if config else None
       for storage_session in results:
-        # Filter by labels if specified
-        if labels_filter:
+        # Apply Python-level label filter for non-PostgreSQL backends
+        if apply_python_filter and labels_filter:
           session_labels = storage_session.labels or {}
           if not all(
               session_labels.get(k) == v for k, v in labels_filter.items()
